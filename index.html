@@ -1,0 +1,34 @@
+<h1 id="cashtokenrequestforcomments20crc20">Cashtoken Request for Comments 20 (CRC-20)</h1>
+<p>With the May 2023 upgrade of Bitcoin Cash, the <a href="https://github.com/bitjson/cashtokens">Cashtoken protocol</a> will be activated. This protocol introduces native support for fungible and non-fungible tokens on Bitcoin Cash, marking a significant advancement from previous Layer-2 token issuance protocols such as the <a href="https://github.com/simpleledger/slp-specifications">Simple Ledger Protocol</a>.</p>
+<p>However, in comparison to popular existing protocols like <a href="https://ethereum.org/en/developers/docs/standards/tokens/erc-20">ERC20</a>, the Cashtoken protocol still lacks certain features. Most notably, it does not specify the token's symbol, name, and decimals.</p>
+<p>The CRC20 protocol is an extension to the Cashtoken protocol. It specifies three metadata fields for tokens: symbol, name, and decimals, applicable to both fungible and non-fungible tokens. It adopts a two-stage registration process similar to <a href="https://ens.domains">ENS</a>: first committing the hash of the metadata onto the blockchain, then revealing the metadata itself. This process prevents attackers from maliciously rushing to register metadata through block reorgs.</p>
+<p>The first token to register a specific symbol defines the "canonical category" for that symbol. This protocol provides a procedure to help clients identify the canonical category of a symbol. The query process does not need new indexing services. Instead, it uses the existing <a href="https://electrum-cash-protocol.readthedocs.io">Electrum protocol</a> in the Bitcoin Cash ecosystem.</p>
+<h2 id="crc20specification">CRC20 Specification</h2>
+<p>This protocol requires that the <a href="https://github.com/bitjson/cashtokens/blob/master/figures/cashtoken-creation.svg">Genesis Output</a> must be a covenant implemented with following code:</p>
+<pre><code>contract GenesisOutput(pubkey recipientPK, bytes metadata, int symbolLength) {
+    function reveal(sig recipientSig) {
+        require(checkSig(recipientSig, recipientPK));
+        bytes20 symbolHash = hash160(metadata.split(symbolLength)[0]);
+        bytes25 outLockingBytecode = new LockingBytecodeP2PKH(symbolHash);
+        require(tx.outputs[0].lockingBytecode == outLockingBytecode);
+    }
+}
+</code></pre>
+<p>The symbol, decimals and name are metadata[:symbolLength], metadata[symbolLength] and metadata[symbolLength+1:], respectively.</p>
+<p>First, create a Genesis Output with a transaction, and after this transaction has enough confirmations, send the <a href="https://github.com/bitjson/cashtokens/blob/master/figures/cashtoken-creation.svg">Genesis Transaction</a>. When the Genesis Output is spent, it will reveal the symbol, decimals, and name metadata.</p>
+<p>This covenant also requires that the first output of the Genesis Transaction is a P2PKH output, but here the hash of the symbol replaces the Pubkey's Hash. In other words, this UTXO cannot be spent by anyone and is referred to as a Symbol UTXO. Its purpose is to be indexed by the Electrum protocol.</p>
+<h2 id="queryasymbolscanonicalcategory">Query a Symbol's Canonical Category</h2>
+<p>Next, we will discuss how to use the Electrum protocol to query what a symbol's canonical category is.</p>
+<p>The Fair Genesis Height of a token is defined as <code>MAX(H_commit, H_reveal-20)</code>, where <code>H_commit</code> (<code>H_reveal</code>) is the height of the transaction committing (revealing) the metadata, respectively. It is strongly discouraged to separate committing and revealing with too many blocks.</p>
+<p>Given a symbol, calculate the address of the Symbol UTXO. Then we use <code>blockchain.address.listunspent</code> to find this address's UTXO list, sort them according to the Fair Genesis Height and the genesis transaction's hash ID, and then filter them:</p>
+<ol>
+<li>If this UTXO has not been packaged into a block, filter it out.</li>
+<li>If this UTXO is not the first output of the transaction, filter it out.</li>
+<li>If this UTXO is not an output of the Genesis Transaction, filter it out. This requires checking whether other outputs have the token category attribute, and the Symbol UTXO itself does not need to have the token category attribute.</li>
+<li>Search for the Target Input among the inputs of this Genesis Transaction. If the Target Input cannot be found, the UTXO should be filtered out. The Target Input must satisfy the following three conditions:<ol>
+<li>It is a <a href="https://github.com/bitjson/cashtokens/blob/master/figures/cashtoken-creation.svg">Genesis Input</a>.</li>
+<li>It spends a covenant whose code is specified above.</li>
+<li>The symbol it reveals is the one we're querying.</li></ol></li>
+</ol>
+<p>The canonical category is the token category defined by the first UTXO in this filtered list.</p>
+<p>When a reorg occurs in the Bitcoin Cash blockchain, the canonical category corresponding to a certain symbol may change.</p>
